@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>TikTok Recharge Simulator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="container">
+  <h1>💎 TikTok Recharge (Demo)</h1>
+
+  <p class="disclaimer">
+    ⚠️ This is a demo recharge simulator for educational purposes only.
+  </p>
+
+  <form id="rechargeForm">
+    <label>TikTok Username</label>
+    <input type="text" id="username" placeholder="@username" required>
+
+    <label>Select Coins</label>
+    <select id="coins" required>
+      <option value="">-- Choose Coins --</option>
+      <option value="70">70 Coins - ₦1,200</option>
+      <option value="350">350 Coins - ₦6,000</option>
+      <option value="700">700 Coins - ₦12,000</option>
+      <option value="1400">1400 Coins - ₦24,000</option>
+      <option value="3500">3500 Coins - ₦60,000</option>
+    </select>
+
+    <button type="submit">Recharge</button>
+  </form>
+
+  <div id="result" class="hidden"></div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
