@@ -1,0 +1,900 @@
+From 0123456789abcdef0123456789abcdef01234567 Mon Sep 17 00:00:00 2001
+From: Copilot <copilot@example.com>
+Date: Fri, 19 Dec 2025 12:00:00 +0000
+Subject: [PATCH] feat(frontend+server): add web frontend and server simulator scaffold
+
+---
+ server/.env.example                      |  11 +++++++++++
+ server/README.md                         | 114 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ server/package.json                      |  21 +++++++++++
+ server/src/index.js                      | 327 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ server/src/seed.js                       |  64 +++++++++++++++++++++++
+ web/.env.example                         |   6 ++++++
+ web/package.json                         |  40 +++++++++++++++++++
+ web/postcss.config.cjs                   |   7 ++++++
+ web/tailwind.config.cjs                  |  10 ++++++++
+ web/vite.config.ts                       |  22 +++++++++++
+ web/tsconfig.json                        |  23 +++++++++++
+ web/index.html                           |  11 +++++++
+ web/README.md                            |  48 +++++++++++++++++++++
+ web/src/api/client.ts                    |  75 ++++++++++++++++++++++++++++++
+ web/src/api/mockClient.ts                | 139 +++++++++++++++++++++++++++++++++++++++++
+ web/src/App.tsx                          |  89 +++++++++++++++++++++++++++++
+ web/src/components/CoinPackCard.tsx      |  41 +++++++++++++++++
+ web/src/main.tsx                         |  24 +++++++++++
+ web/src/pages/Home.tsx                   | 205 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ web/src/pages/Login.tsx                  |  36 ++++++++++++++
+ web/src/styles/index.css                 |  10 +++++++
+ 24 files changed, 1424 insertions(+)
+ create mode 100644 server/.env.example
+ create mode 100644 server/README.md
+ create mode 100644 server/package.json
+ create mode 100644 server/src/index.js
+ create mode 100644 server/src/seed.js
+ create mode 100644 web/.env.example
+ create mode 100644 web/package.json
+ create mode 100644 web/postcss.config.cjs
+ create mode 100644 web/tailwind.config.cjs
+ create mode 100644 web/vite.config.ts
+ create mode 100644 web/tsconfig.json
+ create mode 100644 web/index.html
+ create mode 100644 web/README.md
+ create mode 100644 web/src/api/client.ts
+ create mode 100644 web/src/api/mockClient.ts
+ create mode 100644 web/src/App.tsx
+ create mode 100644 web/src/components/CoinPackCard.tsx
+ create mode 100644 web/src/main.tsx
+ create mode 100644 web/src/pages/Home.tsx
+ create mode 100644 web/src/pages/Login.tsx
+ create mode 100644 web/src/styles/index.css
+
+diff --git a/server/.env.example b/server/.env.example
+new file mode 100644
+index 0000000..e69de29
+--- /dev/null
++++ b/server/.env.example
+@@ -0,0 +1,11 @@
++# Server port
++PORT=3000
++
++# Admin token for simple admin endpoints
++ADMIN_TOKEN=admin-secret
++
++# Simulation config
++SIM_SUCCESS_RATE=0.98
++SIM_MIN_DELAY_MS=800
++SIM_MAX_DELAY_MS=2500
+diff --git a/server/README.md b/server/README.md
+new file mode 100644
+index 0000000..8a6e7bb
+--- /dev/null
++++ b/server/README.md
+@@ -0,0 +1,114 @@
++# TikTok Recharge Simulator (server)
++
++This is a lightweight Express-based simulator for the TikTok recharge flow.
++
++Quick start
++1. Install
++   cd server
++   npm install
++
++2. Seed demo data (optional)
++   npm run seed
++
++3. Start
++   npm start
++   - or for development: npm run dev
++
++Default configuration is in `.env.example`. Copy to `.env` to customize:
++- PORT — server port (default 3000)
++- ADMIN_TOKEN — simple admin auth token
++- SIM_SUCCESS_RATE — probability for simulated payments to succeed (0..1)
++- SIM_MIN_DELAY_MS / SIM_MAX_DELAY_MS — processing delay range in ms
++
++API
++- GET /api/coin-packs
++- GET /api/users/:id/balance
++- POST /api/users/:id/purchase  (body: { packId, paymentMethod?, metadata? }, header Idempotency-Key optional)
++- GET /api/transactions?userId=...
++- POST /api/webhooks/register { url }
++- Admin (x-admin-token header or ?admin_token=...):
++  - GET /api/admin/users
++  - POST /api/admin/users/:id/credit { coins, reason }
++  - GET /api/admin/transactions
++  - POST /api/admin/config { successRate, minDelayMs, maxDelayMs }
++
++Notes
++- Persistence uses a JSON file at server/data/db.json by default.
++- Webhook deliveries are recorded in db.json (deliveries) for demo purposes; we do not POST to external URLs in this simple version.
+diff --git a/server/package.json b/server/package.json
+new file mode 100644
+index 0000000..3f9c06f
+--- /dev/null
++++ b/server/package.json
+@@ -0,0 +1,21 @@
+{
+  "name": "tiktok-recharge-simulator",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon --watch src --exec \"node src/index.js\"",
+    "seed": "node src/seed.js"
+  },
+  "dependencies": {
+    "body-parser": "^1.20.2",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "lowdb": "^6.0.1",
+    "nanoid": "^4.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
+diff --git a/server/src/index.js b/server/src/index.js
+new file mode 100644
+index 0000000..b3b0f6f
+--- /dev/null
++++ b/server/src/index.js
+@@ -0,0 +1,327 @@
++/* Simple Express-based TikTok recharge simulator (file-backed using lowdb)
++   Features:
++   - /api/coin-packs
++   - /api/users/:id/balance
++   - POST /api/users/:id/purchase  (Idempotency-Key supported)
++   - GET /api/transactions (filter by userId)
++   - Admin endpoints protected by ADMIN_TOKEN
++   - Webhook registration (in-memory)
++*/
++const express = require('express');
++const bodyParser = require('body-parser');
++const cors = require('cors');
++const { Low, JSONFile } = require('lowdb');
++const path = require('path');
++const { nanoid } = require('nanoid');
++const fs = require('fs');
++
++require('dotenv').config();
++
++const PORT = process.env.PORT || 3000;
++const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'admin-secret';
++const DB_FILE = process.env.DB_FILE || path.join(__dirname, '..', 'data', 'db.json');
++const SIM_SUCCESS_RATE = Number(process.env.SIM_SUCCESS_RATE ?? 0.98);
++const SIM_MIN_DELAY_MS = Number(process.env.SIM_MIN_DELAY_MS ?? 800);
++const SIM_MAX_DELAY_MS = Number(process.env.SIM_MAX_DELAY_MS ?? 2500);
++
++async function ensureDbFile(file) {
++  const dir = path.dirname(file);
++  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
++  if (!fs.existsSync(file)) {
++    const defaultDb = {
++      users: [],
++      coinPacks: [],
++      transactions: [],
++      webhooks: []
++    };
++    fs.writeFileSync(file, JSON.stringify(defaultDb, null, 2));
++  }
++}
++
++(async () => {
++  await ensureDbFile(DB_FILE);
++  const adapter = new JSONFile(DB_FILE);
++  const db = new Low(adapter);
++  await db.read();
++  db.data = db.data || { users: [], coinPacks: [], transactions: [], webhooks: [] };
++
++  // Initialize default coin packs if empty
++  if (!db.data.coinPacks || db.data.coinPacks.length === 0) {
++    db.data.coinPacks = [
++      { id: 'pack_small', coins: 100, priceUSD: 0.99, description: 'Small pack' },
++      { id: 'pack_medium', coins: 550, priceUSD: 4.99, description: 'Best value' },
++      { id: 'pack_large', coins: 1200, priceUSD: 9.99, description: 'Popular' },
++      { id: 'pack_xl', coins: 2600, priceUSD: 19.99, description: 'XL' }
++    ];
++    await db.write();
++  }
++
++  const app = express();
++  app.use(cors());
++  app.use(bodyParser.json());
++
++  // Helpers
++  function randomDelay() {
++    const min = SIM_MIN_DELAY_MS;
++    const max = SIM_MAX_DELAY_MS;
++    return Math.floor(Math.random() * (max - min + 1)) + min;
++  }
++  function simulateOutcome() {
++    return Math.random() < SIM_SUCCESS_RATE;
++  }
++
++  // Simple auth middleware for admin endpoints
++  function requireAdmin(req, res, next) {
++    const token = req.header('x-admin-token') || req.query.admin_token;
++    if (token !== ADMIN_TOKEN) return res.status(401).json({ message: 'Unauthorized (admin token missing/invalid)' });
++    next();
++  }
++
++  // GET coin packs
++  app.get('/api/coin-packs', async (req, res) => {
++    await db.read();
++    res.json(db.data.coinPacks);
++  });
++
++  // GET user balance (if user not found, return balance 0)
++  app.get('/api/users/:id/balance', async (req, res) => {
++    const userId = req.params.id;
++    await db.read();
++    const user = db.data.users.find(u => u.id === userId);
++    res.json({ userId, balance: user ? user.balance : 0 });
++  });
++
++  // Create or ensure user
++  function ensureUser(dbData, id) {
++    let u = dbData.users.find(x => x.id === id);
++    if (!u) {
++      u = { id, displayName: id, balance: 0 };
++      dbData.users.push(u);
++    }
++    return u;
++  }
++
++  // In-memory idempotency map to map idempotency keys to transactionIds (persisted in DB transactions as idempotencyKey too)
++  // POST purchase
++  app.post('/api/users/:id/purchase', async (req, res) => {
++    const userId = req.params.id;
++    const { packId, paymentMethod = 'mock-pay', metadata = {} } = req.body || {};
++    const idempotencyKey = req.header('Idempotency-Key') || null;
++
++    if (!packId) return res.status(400).json({ message: 'packId is required' });
++
++    await db.read();
++    const pack = db.data.coinPacks.find(p => p.id === packId);
++    if (!pack) return res.status(404).json({ message: 'pack not found' });
++
++    // Check idempotent existing transaction
++    if (idempotencyKey) {
++      const existing = db.data.transactions.find(t => t.idempotencyKey === idempotencyKey && t.userId === userId && t.packId === packId);
++      if (existing) {
++        return res.json({
++          transactionId: existing.id,
++          status: existing.status,
++          estimatedCompletion: existing.estimatedCompletion || null
++        });
++      }
++    }
++
++    // Create transaction (pending)
++    const txnId = nanoid();
++    const createdAt = new Date().toISOString();
++    const tx = {
++      id: txnId,
++      userId,
++      packId,
++      coins: pack.coins,
++      amountUSD: pack.priceUSD,
++      paymentMethod,
++      status: 'pending',
++      idempotencyKey,
++      metadata,
++      createdAt,
++      updatedAt: createdAt,
++      completedAt: null
++    };
++    db.data.transactions.push(tx);
++    ensureUser(db.data, userId);
++    await db.write();
++
++    res.status(202).json({ transactionId: txnId, status: 'pending', estimatedCompletion: new Date(Date.now() + randomDelay()).toISOString() });
++
++    // Simulate payment processing in background
++    const delay = randomDelay();
++    setTimeout(async () => {
++      await db.read();
++      const transaction = db.data.transactions.find(t => t.id === txnId);
++      if (!transaction) return;
++
++      const success = simulateOutcome();
++      transaction.status = success ? 'succeeded' : 'failed';
++      transaction.updatedAt = new Date().toISOString();
++      transaction.completedAt = transaction.updatedAt;
++      // On success credit user
++      if (success) {
++        const user = ensureUser(db.data, userId);
++        user.balance = (user.balance || 0) + transaction.coins;
++      }
++      await db.write();
++
++      // deliver webhook(s) - simple in-memory webhook registration list in db.data.webhooks
++      if (Array.isArray(db.data.webhooks)) {
++        const payload = { type: 'transaction.updated', data: { transactionId: transaction.id, userId, status: transaction.status, coins: transaction.coins, amountUSD: transaction.amountUSD, timestamp: transaction.updatedAt } };
++        // Attempt delivery (fire & forget; we do not actually perform HTTP POST to registered URLs to keep dependencies small).
++        // We'll record deliveries in db for demo purposes.
++        db.data.deliveries = db.data.deliveries || [];
++        db.data.webhooks.forEach(w => {
++          db.data.deliveries.push({ id: nanoid(), webhookId: w.id, url: w.url, payload, deliveredAt: new Date().toISOString() });
++        });
++        await db.write();
++      }
++    }, delay);
++  });
++
++  // Get transactions (optionally filter by userId)
++  app.get('/api/transactions', async (req, res) => {
++    const uid = req.query.userId;
++    await db.read();
++    let txs = db.data.transactions || [];
++    if (uid) txs = txs.filter(t => t.userId === uid);
++    res.json(txs);
++  });
++
++  // Register a webhook (demo)
++  app.post('/api/webhooks/register', async (req, res) => {
++    const { url, description } = req.body || {};
++    if (!url) return res.status(400).json({ message: 'url is required' });
++    await db.read();
++    const id = nanoid();
++    db.data.webhooks = db.data.webhooks || [];
++    db.data.webhooks.push({ id, url, description: description || '', createdAt: new Date().toISOString() });
++    await db.write();
++    res.json({ id, url });
++  });
++
++  // Admin endpoints
++  app.get('/api/admin/users', requireAdmin, async (req, res) => {
++    await db.read();
++    res.json(db.data.users || []);
++  });
++
++  app.post('/api/admin/users/:id/credit', requireAdmin, async (req, res) => {
++    const userId = req.params.id;
++    const { coins, reason } = req.body || {};
++    if (!coins || typeof coins !== 'number') return res.status(400).json({ message: 'coins (number) required' });
++    await db.read();
++    const user = ensureUser(db.data, userId);
++    user.balance = (user.balance || 0) + coins;
++    db.data.transactions.push({
++      id: nanoid(),
++      userId,
++      packId: 'admin_credit',
++      coins,
++      amountUSD: 0,
++      status: 'succeeded',
++      paymentMethod: 'admin',
++      metadata: { reason },
++      createdAt: new Date().toISOString(),
++      updatedAt: new Date().toISOString(),
++      completedAt: new Date().toISOString()
++    });
++    await db.write();
++    res.json({ userId, balance: user.balance });
++  });
++
++  app.get('/api/admin/transactions', requireAdmin, async (req, res) => {
++    await db.read();
++    res.json(db.data.transactions || []);
++  });
++
++  app.post('/api/admin/config', requireAdmin, async (req, res) => {
++    const { successRate, minDelayMs, maxDelayMs } = req.body || {};
++    if (typeof successRate === 'number') { process.env.SIM_SUCCESS_RATE = String(successRate); }
++    if (typeof minDelayMs === 'number') { process.env.SIM_MIN_DELAY_MS = String(minDelayMs); }
++    if (typeof maxDelayMs === 'number') { process.env.SIM_MAX_DELAY_MS = String(maxDelayMs); }
++    return res.json({ message: 'Config updated in memory. Restart server to persist env changes.' });
++  });
++
++  // simple status
++  app.get('/api/_status', async (req, res) => {
++    await db.read();
++    res.json({ ok: true, users: db.data.users.length, transactions: db.data.transactions.length, coinPacks: db.data.coinPacks.length });
++  });
++
++  app.listen(PORT, () => {
++    console.log(`Simulator running on http://localhost:${PORT} (API root /api)`);
++    console.log(`DB file: ${DB_FILE}`);
++    console.log(`Sim success rate: ${SIM_SUCCESS_RATE}, delay [${SIM_MIN_DELAY_MS},${SIM_MAX_DELAY_MS}]ms`);
++  });
++})();
+diff --git a/server/src/seed.js b/server/src/seed.js
+new file mode 100644
+index 0000000..d5d6f7a
+--- /dev/null
++++ b/server/src/seed.js
+@@ -0,0 +1,64 @@
++/* Seed script for the simulator (creates demo user and sample data if needed) */
++const fs = require('fs');
++const path = require('path');
++const { nanoid } = require('nanoid');
++
++const DB_FILE = process.env.DB_FILE || path.join(__dirname, '..', 'data', 'db.json');
++
++function ensureDir(file) {
++  const dir = path.dirname(file);
++  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
++}
++
++ensureDir(DB_FILE);
++
++let data = {
++  users: [
++    { id: 'demo-user-1', displayName: 'Demo User 1', balance: 0 },
++    { id: 'demo-user-2', displayName: 'Demo User 2', balance: 500 }
++  ],
++  coinPacks: [
++    { id: 'pack_small', coins: 100, priceUSD: 0.99, description: 'Small pack' },
++    { id: 'pack_medium', coins: 550, priceUSD: 4.99, description: 'Best value' },
++    { id: 'pack_large', coins: 1200, priceUSD: 9.99, description: 'Popular' },
++    { id: 'pack_xl', coins: 2600, priceUSD: 19.99, description: 'XL' }
++  ],
++  transactions: [],
++  webhooks: [],
++  deliveries: []
++};
++
++fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
++console.log('Seed data written to', DB_FILE);
+diff --git a/web/.env.example b/web/.env.example
+new file mode 100644
+index 0000000..e69de29
+--- /dev/null
++++ b/web/.env.example
+@@ -0,0 +1,6 @@
++# If you want the frontend to use the in-browser mock API instead of a backend server, set:
++VITE_USE_MOCK=true
++
++VITE_API_BASE=http://localhost:3000/api
++VITE_ADMIN_TOKEN=admin-secret
+diff --git a/web/package.json b/web/package.json
+new file mode 100644
+index 0000000..f6f2b62
+--- /dev/null
++++ b/web/package.json
+@@ -0,0 +1,40 @@
+{
+  "name": "tiktok-recharge-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 5173",
+    "lint": "eslint --ext .ts,.tsx src || true"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "axios": "^1.4.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.21",
+    "@types/react-dom": "^18.2.7",
+    "autoprefixer": "^10.4.14",
+    "postcss": "^8.4.24",
+    "tailwindcss": "^3.4.8",
+    "typescript": "^5.4.2",
+    "vite": "^5.1.0",
+    "@vitejs/plugin-react": "^4.0.0"
+  }
+}
+diff --git a/web/postcss.config.cjs b/web/postcss.config.cjs
+new file mode 100644
+index 0000000..3b2c5b9
+--- /dev/null
++++ b/web/postcss.config.cjs
+@@ -0,0 +1,7 @@
++module.exports = {
++  plugins: {
++    tailwindcss: {},
++    autoprefixer: {}
++  }
++};
+diff --git a/web/tailwind.config.cjs b/web/tailwind.config.cjs
+new file mode 100644
+index 0000000..3e3cb6f
+--- /dev/null
++++ b/web/tailwind.config.cjs
+@@ -0,0 +1,10 @@
++module.exports = {
++  content: ["./index.html", "./src/**/*.{ts,tsx,js,jsx}"],
++  theme: {
++    extend: {}
++  },
++  plugins: []
++};
+diff --git a/web/vite.config.ts b/web/vite.config.ts
+new file mode 100644
+index 0000000..b6a9f10
+--- /dev/null
++++ b/web/vite.config.ts
+@@ -0,0 +1,22 @@
++import { defineConfig } from 'vite';
++import react from '@vitejs/plugin-react';
++
++export default defineConfig({
++  plugins: [react()],
++  server: {
++    port: 5173
++  },
++  define: {
++    // any global defines if needed
++  }
++});
+diff --git a/web/tsconfig.json b/web/tsconfig.json
+new file mode 100644
+index 0000000..2a3a5f1
+--- /dev/null
++++ b/web/tsconfig.json
+@@ -0,0 +1,23 @@
++{
++  "compilerOptions": {
++    "target": "ES2021",
++    "lib": ["DOM", "ES2021"],
++    "jsx": "react-jsx",
++    "module": "ESNext",
++    "moduleResolution": "Node",
++    "esModuleInterop": true,
++    "skipLibCheck": true,
++    "forceConsistentCasingInFileNames": true,
++    "strict": true,
++    "resolveJsonModule": true,
++    "isolatedModules": true,
++    "noEmit": true
++  },
++  "include": ["src"]
++}
+diff --git a/web/index.html b/web/index.html
+new file mode 100644
+index 0000000..60d8d1f
+--- /dev/null
++++ b/web/index.html
+@@ -0,0 +1,11 @@
++<!doctype html>
++<html lang="en">
++  <head>
++    <meta charset="utf-8" />
++    <meta name="viewport" content="width=device-width,initial-scale=1" />
++    <title>TikTok Recharge Simulator</title>
++  </head>
++  <body>
++    <div id="root"></div>
++    <script type="module" src="/src/main.tsx"></script>
++  </body>
++</html>
+diff --git a/web/README.md b/web/README.md
+new file mode 100644
+index 0000000..5a2d7c6
+--- /dev/null
++++ b/web/README.md
+@@ -0,0 +1,48 @@
++```markdown
++# TikTok Recharge Simulator — Web Demo
++
++This directory contains a React + TypeScript + Vite front-end for the TikTok Recharge Coin Simulator.
++
++Quick demo options:
++- Use the in-browser mock API (no server required): set VITE_USE_MOCK=true in web/.env and run the frontend.
++- Connect to the server simulator: set VITE_USE_MOCK=false (or unset) and VITE_API_BASE to your server's API base, e.g. http://localhost:3000/api.
++
++Getting started (frontend)
++1. Install
++   cd web
++   npm install
++
++2. Configure
++   cp .env.example .env
++   Edit .env as needed
++
++3. Run dev server
++   npm run dev
++   Open http://localhost:5173
++```
+diff --git a/web/src/api/client.ts b/web/src/api/client.ts
+new file mode 100644
+index 0000000..4dd8f1b
+--- /dev/null
++++ b/web/src/api/client.ts
+@@ -0,0 +1,75 @@
++import axios from 'axios';
++import mockClient from './mockClient';
++
++const USE_MOCK = (import.meta.env.VITE_USE_MOCK === 'true');
++
++if (USE_MOCK) {
++  // simple wrapper that exposes get/post like axios
++  export default {
++    get: (u: string, conf?: any) => mockClient.get(u),
++    post: (u: string, body?: any, conf?: any) => mockClient.post(u, body, conf)
++  } as any;
++}
++
++const API_BASE = (import.meta.env.VITE_API_BASE as string) || 'http://localhost:3000/api';
++
++const client = axios.create({
++  baseURL: API_BASE,
++  timeout: 10000,
++  headers: {
++    'Content-Type': 'application/json'
++  }
++});
++
++client.interceptors.response.use(r => r, e => Promise.reject(e));
++
++export default client;
+diff --git a/web/src/api/mockClient.ts b/web/src/api/mockClient.ts
+new file mode 100644
+index 0000000..3f84f1a
+--- /dev/null
++++ b/web/src/api/mockClient.ts
+@@ -0,0 +1,139 @@
++/* A small in-browser mock API client that simulates the same endpoints as the real backend.
++   Use by setting VITE_USE_MOCK=true in web/.env
++*/
++type Pack = { id: string; coins: number; priceUSD: number; description?: string };
++type Tx = { id: string; userId: string; packId: string; coins: number; amountUSD: number; status: string; createdAt: string };
++
++const wait = (ms: number) => new Promise(r => setTimeout(r, ms));
++
++const defaultPacks: Pack[] = [
++  { id: 'pack_small', coins: 100, priceUSD: 0.99, description: 'Small pack' },
++  { id: 'pack_medium', coins: 550, priceUSD: 4.99, description: 'Best value' },
++  { id: 'pack_large', coins: 1200, priceUSD: 9.99, description: 'Popular' },
++  { id: 'pack_xl', coins: 2600, priceUSD: 19.99, description: 'XL' }
++];
++
++const store = {
++  users: { 'demo-user-1': { id: 'demo-user-1', displayName: 'Demo', balance: 0 } },
++  packs: defaultPacks,
++  transactions: [] as Tx[]
++};
++
++function randDelay() {
++  return 500 + Math.floor(Math.random() * 1200);
++}
++
++function genId() {
++  return Math.random().toString(36).slice(2, 10);
++}
++
++const mockClient = {
++  get: async (url: string) => {
++    if (url === '/coin-packs') {
++      await wait(randDelay());
++      return { data: store.packs };
++    }
++    if (url.startsWith('/users/') && url.endsWith('/balance')) {
++      await wait(100);
++      const userId = url.split('/')[2];
++      const u = store.users[userId];
++      return { data: { userId, balance: u ? u.balance : 0 } };
++    }
++    if (url.startsWith('/transactions')) {
++      const uParam = new URLSearchParams(url.split('?')[1] || '');
++      const uid = uParam.get('userId');
++      const txs = uid ? store.transactions.filter(t => t.userId === uid) : store.transactions;
++      await wait(150);
++      return { data: txs };
++    }
++    return { data: null };
++  },
++
++  post: async (url: string, body?: any, conf?: any) => {
++    if (url.startsWith('/users/') && url.endsWith('/purchase')) {
++      const userId = url.split('/')[2];
++      const { packId } = body || {};
++      const pack = store.packs.find(p => p.id === packId);
++      if (!pack) throw { response: { data: { message: 'pack not found' } } };
++      const idempotencyKey = conf?.headers?.['Idempotency-Key'] || null;
++      // idempotency check
++      if (idempotencyKey) {
++        const existing = store.transactions.find(t => (t as any).idempotencyKey === idempotencyKey && t.userId === userId && t.packId === packId);
++        if (existing) return { data: { transactionId: existing.id, status: existing.status } };
++      }
++      const txId = genId();
++      const createdAt = new Date().toISOString();
++      const tx: Tx = { id: txId, userId, packId, coins: pack.coins, amountUSD: pack.priceUSD, status: 'pending', createdAt };
++      (tx as any).idempotencyKey = idempotencyKey;
++      store.transactions.push(tx);
++      // simulate completion
++      setTimeout(() => {
++        const succeed = Math.random() < 0.98;
++        tx.status = succeed ? 'succeeded' : 'failed';
++        if (succeed) {
++          store.users[userId] = store.users[userId] || { id: userId, displayName: userId, balance: 0 };
++          store.users[userId].balance += tx.coins;
++        }
++      }, randDelay());
++      return { data: { transactionId: txId, status: 'pending', estimatedCompletion: new Date(Date.now() + 1000 + Math.random()*1000).toISOString() } };
++    }
++
++    if (url === '/webhooks/register') {
++      const id = genId();
++      await wait(150);
++      return { data: { id, url: body?.url } };
++    }
++
++    return { data: null };
++  }
++};
++
++export default mockClient;
+diff --git a/web/src/App.tsx b/web/src/App.tsx
+new file mode 100644
+index 0000000..3b2a7e4
+--- /dev/null
++++ b/web/src/App.tsx
+@@ -0,0 +1,89 @@
++import React from 'react';
++import Home from './pages/Home';
++import Login from './pages/Login';
++
++export default function App() {
++  // Very small router substitution: ?page=login
++  const params = new URLSearchParams(window.location.search);
++  const page = params.get('page') || 'home';
++
++  return (
++    <div className="min-h-screen">
++      <header className="bg-white shadow-sm">
++        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
++          <h1 className="font-semibold text-xl">TikTok Recharge Simulator</h1>
++          <nav className="space-x-3">
++            <a href="/" className="text-sm text-slate-600 hover:underline">Home</a>
++            <a href="?page=login" className="text-sm text-slate-600 hover:underline">Login</a>
++          </nav>
++        </div>
++      </header>
++
++      <main className="max-w-4xl mx-auto px-4 py-8">
++        {page === 'login' ? <Login /> : <Home />}
++      </main>
++    </div>
++  );
++}
+diff --git a/web/src/components/CoinPackCard.tsx b/web/src/components/CoinPackCard.tsx
+new file mode 100644
+index 0000000..c2f8b7d
+--- /dev/null
++++ b/web/src/components/CoinPackCard.tsx
+@@ -0,0 +1,41 @@
++import React from 'react';
++
++export default function CoinPackCard({ pack, onBuy }: { pack: { id: string; coins: number; priceUSD: number; description?: string }; onBuy: () => void }) {
++  return (
++    <div className="bg-white p-4 rounded shadow-sm flex flex-col justify-between">
++      <div>
++        <div className="text-lg font-semibold">{pack.coins} coins</div>
++        <div className="text-slate-500 text-sm">${pack.priceUSD.toFixed(2)}</div>
++        {pack.description && <div className="text-sm mt-2 text-slate-600">{pack.description}</div>}
++      </div>
++      <div className="mt-4">
++        <button onClick={onBuy} className="w-full bg-rose-500 hover:bg-rose-600 text-white py-2 rounded">
++          Buy
++        </button>
++      </div>
++    </div>
++  );
++}
+diff --git a/web/src/main.tsx b/web/src/main.tsx
+new file mode 100644
+index 0000000..f0b9c7b
+--- /dev/null
++++ b/web/src/main.tsx
+@@ -0,0 +1,24 @@
++import React from 'react';
++import { createRoot } from 'react-dom/client';
++import App from './App';
++import './styles/index.css';
++
++createRoot(document.getElementById('root')!).render(
++  <React.StrictMode>
++    <App />
++  </React.StrictMode>
++);
+diff --git a/web/src/pages/Home.tsx b/web/src/pages/Home.tsx
+new file mode 100644
+index 0000000..d5b6d8f
+--- /dev/null
++++ b/web/src/pages/Home.tsx
+@@ -0,0 +1,205 @@
++import React, { useEffect, useState } from 'react';
++import CoinPackCard from '../components/CoinPackCard';
++import api from '../api/client';
++
++type Pack = {
++  id: string;
++  coins: number;
++  priceUSD: number;
++  description?: string;
++};
++
++export default function Home() {
++  const [packs, setPacks] = useState<Pack[]>([]);
++  const [loading, setLoading] = useState(false);
++  const [message, setMessage] = useState<string | null>(null);
++
++  useEffect(() => {
++    setLoading(true);
++    api.get('/coin-packs')
++      .then(res => setPacks(res.data || []))
++      .catch(() => setMessage('Failed to load coin packs. Is the backend running?'))
++      .finally(() => setLoading(false));
++  }, []);
++
++  const handleBuy = async (packId: string) => {
++    setMessage(null);
++    try {
++      // demo user id hard-coded for quick start
++      const userId = 'demo-user-1';
++      const idempotencyKey = cryptoRandomId();
++      const resp = await api.post(`/users/${userId}/purchase`, { packId }, { headers: { 'Idempotency-Key': idempotencyKey }});
++      setMessage(`Transaction created: ${resp.data.transactionId} (status=${resp.data.status})`);
++    } catch (err: any) {
++      setMessage(err?.response?.data?.message || 'Purchase failed (is backend reachable?)');
++    }
++  };
++
++  return (
++    <div>
++      <h2 className="text-2xl font-semibold mb-4">Coin Packs</h2>
++      {loading && <p className="text-sm text-slate-500">Loading packs…</p>}
++      {message && <div className="my-4 p-3 bg-amber-50 border border-amber-200 rounded">{message}</div>}
++      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
++        {packs.map(p => (
++          <CoinPackCard key={p.id} pack={p} onBuy={() => handleBuy(p.id)} />
++        ))}
++      </div>
++      <div className="mt-8 text-sm text-slate-500">
++        This is a demo UI that calls the simulator backend. Configure the backend URL in <code className="bg-slate-100 px-1 rounded">.env</code>.
++      </div>
++    </div>
++  );
++}
++
++function cryptoRandomId() {
++  return (crypto && (crypto as any).randomUUID ? (crypto as any).randomUUID() : Math.random().toString(36).slice(2));
++}
+diff --git a/web/src/pages/Login.tsx b/web/src/pages/Login.tsx
+new file mode 100644
+index 0000000..9e1b7c3
+--- /dev/null
++++ b/web/src/pages/Login.tsx
+@@ -0,0 +1,36 @@
++import React from 'react';
++
++export default function Login() {
++  // A demo "login" that just shows instructions
++  return (
++    <div className="bg-white p-6 rounded shadow-sm">
++      <h2 className="text-xl font-medium mb-2">Demo Login</h2>
++      <p className="text-sm mb-4">
++        This demo uses a simple "demo" login flow. To connect to a real simulator backend:
++      </p>
++      <ol className="list-decimal list-inside text-sm space-y-2">
++        <li>Start the backend and set VITE_API_BASE in <code className="bg-slate-100 px-1 rounded">.env</code>.</li>
++        <li>Create or use a demo user (example userId: <code className="bg-slate-100 px-1 rounded">demo-user-1</code>).</li>
++        <li>Return to the Home page and buy coin packs.</li>
++      </ol>
++      <div className="mt-4 text-sm text-slate-500">This UI intentionally keeps auth minimal for demo purposes.</div>
++    </div>
++  );
++}
+diff --git a/web/src/styles/index.css b/web/src/styles/index.css
+new file mode 100644
+index 0000000..3df9a2b
+--- /dev/null
++++ b/web/src/styles/index.css
+@@ -0,0 +1,10 @@
++@tailwind base;
++@tailwind components;
++@tailwind utilities;
++
++/* small custom styles */
++body {
++  @apply bg-slate-50 text-slate-800;
++}
+-- 
+2.34.1
